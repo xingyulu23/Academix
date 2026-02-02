@@ -1,0 +1,18 @@
+{
+  "academix": {
+    "type": "local",
+    "command": [
+      "uv",
+      "run",
+      "--directory",
+      "/home/lu/Code/academicmcp",
+      "academix"
+    ],
+    "environment": {
+      "ACADEMIX_EMAIL": "your.email@example.com",
+      "SEMANTIC_SCHOLAR_API_KEY": "optional_api_key"
+    },
+    "enabled": true,
+    "timeout": 10000
+  }
+}
