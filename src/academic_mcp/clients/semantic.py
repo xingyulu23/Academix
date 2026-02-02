@@ -11,7 +11,9 @@ from typing import Any, cast
 
 import httpx
 
-from ..models import Author, Paper, PaperSource, RelatedPapersResult, SearchResult
+from ..bibtex import generate_bibtex
+from ..cache import get_bibtex_cache
+from ..models import Author, CitationResult, Paper, PaperSource, RelatedPapersResult, SearchResult
 from .base import BaseClient
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,7 @@ class SemanticScholarClient(BaseClient):
         """
         super().__init__(timeout=timeout)
         self.api_key = api_key
+        self._bibtex_cache = get_bibtex_cache()
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get HTTP client with API key header if provided."""
@@ -375,3 +378,106 @@ class SemanticScholarClient(BaseClient):
         except Exception as e:
             logger.error(f"S2 author search failed: {e}")
             raise
+
+    async def get_citations(
+        self,
+        paper_id: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> CitationResult:
+        """Get papers that cite this paper.
+
+        Args:
+            paper_id: S2 paper ID, DOI, or arXiv ID
+            limit: Maximum citing papers to return
+            offset: Pagination offset
+
+        Returns:
+            CitationResult with citing papers
+        """
+        paper = await self.get_paper(paper_id)
+        if not paper:
+            return CitationResult(
+                paper_id=paper_id,
+                citation_count=0,
+                citing_papers=[],
+                has_more=False,
+            )
+
+        s2_id = paper.id
+
+        params = {
+            "fields": ",".join(self.PAPER_FIELDS),
+            "limit": min(limit, 100),
+            "offset": offset,
+        }
+
+        try:
+            response = await self._get(f"{self.BASE_URL}/paper/{s2_id}/citations", params=params)
+            data = response.json()
+
+            citing_papers = []
+            for item in data.get("data", []):
+                citing_paper_data = item.get("citingPaper", {})
+                if citing_paper_data:
+                    try:
+                        citing_papers.append(self._parse_paper(citing_paper_data))
+                    except Exception as e:
+                        logger.warning(f"Failed to parse citing paper: {e}")
+                        continue
+
+            total = data.get("total", paper.citation_count or 0)
+
+            return CitationResult(
+                paper_id=paper_id,
+                citation_count=total,
+                citing_papers=citing_papers,
+                has_more=data.get("next") is not None,
+            )
+
+        except Exception as e:
+            logger.warning(f"S2 get_citations failed for {paper_id}: {e}")
+            return CitationResult(
+                paper_id=paper_id,
+                citation_count=paper.citation_count if paper else 0,
+                citing_papers=[],
+                has_more=False,
+            )
+
+    async def get_bibtex(self, paper_id: str) -> str | None:
+        """Get BibTeX entry for a paper.
+
+        Generates BibTeX from Semantic Scholar metadata.
+
+        Args:
+            paper_id: S2 paper ID, DOI, or arXiv ID
+
+        Returns:
+            BibTeX entry string or None if paper not found
+        """
+        cache_key = self._bibtex_cache.bibtex_key(f"semantic:{paper_id}")
+        cached = self._bibtex_cache.get(cache_key)
+        if cached:
+            return cast(str, cached)
+
+        paper = await self.get_paper(paper_id)
+        if paper:
+            bibtex = generate_bibtex(paper)
+            self._bibtex_cache.set(cache_key, bibtex)
+            return bibtex
+
+        return None
+
+    async def get_bibtex_batch(self, paper_ids: list[str]) -> dict[str, str | None]:
+        """Get BibTeX entries for multiple papers.
+
+        Args:
+            paper_ids: List of paper identifiers
+
+        Returns:
+            Dictionary mapping paper_id to BibTeX entry (or None if not found)
+        """
+        results: dict[str, str | None] = {}
+        for paper_id in paper_ids:
+            results[paper_id] = await self.get_bibtex(paper_id)
+        return results

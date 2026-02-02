@@ -9,6 +9,8 @@ Key feature: Authoritative DOI resolution and metadata.
 import logging
 from typing import Any, cast
 
+from ..bibtex import generate_bibtex
+from ..cache import get_bibtex_cache
 from ..models import Author, Paper, PaperSource, SearchResult
 from .base import BaseClient
 
@@ -44,6 +46,7 @@ class CrossRefClient(BaseClient):
         """
         super().__init__(timeout=timeout)
         self.email = email
+        self._bibtex_cache = get_bibtex_cache()
         if email:
             self.user_agent = f"AcademicMCP/0.1.0 (mailto:{email})"
 
@@ -330,3 +333,41 @@ class CrossRefClient(BaseClient):
         except Exception as e:
             logger.error(f"CrossRef author search failed: {e}")
             raise
+
+    async def get_bibtex(self, paper_id: str) -> str | None:
+        """Get BibTeX entry for a paper by DOI.
+
+        Generates BibTeX from CrossRef metadata.
+
+        Args:
+            paper_id: DOI (with or without prefix)
+
+        Returns:
+            BibTeX entry string or None if paper not found
+        """
+        cache_key = self._bibtex_cache.bibtex_key(f"crossref:{paper_id}")
+        cached = self._bibtex_cache.get(cache_key)
+        if cached:
+            return cast(str, cached)
+
+        paper = await self.get_paper(paper_id)
+        if paper:
+            bibtex = generate_bibtex(paper)
+            self._bibtex_cache.set(cache_key, bibtex)
+            return bibtex
+
+        return None
+
+    async def get_bibtex_batch(self, paper_ids: list[str]) -> dict[str, str | None]:
+        """Get BibTeX entries for multiple papers.
+
+        Args:
+            paper_ids: List of DOIs
+
+        Returns:
+            Dictionary mapping paper_id to BibTeX entry (or None if not found)
+        """
+        results: dict[str, str | None] = {}
+        for paper_id in paper_ids:
+            results[paper_id] = await self.get_bibtex(paper_id)
+        return results

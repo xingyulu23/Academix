@@ -10,6 +10,8 @@ from typing import Any, cast
 
 import arxiv  # type: ignore[import-untyped]
 
+from ..bibtex import generate_bibtex
+from ..cache import get_bibtex_cache
 from ..models import Author, Paper, PaperSource, SearchResult
 from .base import BaseClient
 
@@ -40,6 +42,7 @@ class ArxivClient(BaseClient):
         """
         super().__init__(timeout=timeout)
         self.delay_seconds = delay_seconds
+        self._bibtex_cache = get_bibtex_cache()
         self._arxiv_client = arxiv.Client(
             page_size=100,
             delay_seconds=delay_seconds,
@@ -269,3 +272,41 @@ class ArxivClient(BaseClient):
             search_query = f"{search_query} AND {query}"
 
         return await self.search(query=search_query, limit=limit)
+
+    async def get_bibtex(self, paper_id: str) -> str | None:
+        """Get BibTeX entry for an arXiv paper.
+
+        Generates BibTeX from arXiv metadata.
+
+        Args:
+            paper_id: arXiv ID (e.g., '2401.12345' or 'arxiv:2401.12345')
+
+        Returns:
+            BibTeX entry string or None if paper not found
+        """
+        cache_key = self._bibtex_cache.bibtex_key(f"arxiv:{paper_id}")
+        cached = self._bibtex_cache.get(cache_key)
+        if cached:
+            return cast(str, cached)
+
+        paper = await self.get_paper(paper_id)
+        if paper:
+            bibtex = generate_bibtex(paper)
+            self._bibtex_cache.set(cache_key, bibtex)
+            return bibtex
+
+        return None
+
+    async def get_bibtex_batch(self, paper_ids: list[str]) -> dict[str, str | None]:
+        """Get BibTeX entries for multiple papers.
+
+        Args:
+            paper_ids: List of arXiv IDs
+
+        Returns:
+            Dictionary mapping paper_id to BibTeX entry (or None if not found)
+        """
+        results: dict[str, str | None] = {}
+        for paper_id in paper_ids:
+            results[paper_id] = await self.get_bibtex(paper_id)
+        return results

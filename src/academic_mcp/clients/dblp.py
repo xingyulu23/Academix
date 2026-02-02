@@ -47,9 +47,13 @@ class DBLPClient(BaseClient):
             if isinstance(author_data, str):
                 authors.append(Author(name=author_data))
             elif isinstance(author_data, dict):
+                # Handle cases where author data might be complex or just text
+                name = author_data.get("text") or author_data.get("@text") or "Unknown"
+                if isinstance(name, list):
+                    name = name[0] if name else "Unknown"
                 authors.append(
                     Author(
-                        name=author_data.get("text") or author_data.get("@text") or "Unknown",
+                        name=str(name),
                         author_id=author_data.get("@pid"),
                     )
                 )
@@ -69,11 +73,17 @@ class DBLPClient(BaseClient):
 
         # Get DOI
         doi = info.get("doi")
-        if doi and not doi.startswith("10."):
+        if doi and not isinstance(doi, str):  # Handle list or other types
+            doi = None
+        elif doi and not doi.startswith("10."):
             doi = None
 
         # Extract DBLP key for BibTeX retrieval
-        dblp_key = info.get("key", hit.get("@id", ""))
+        # The key is usually in 'key' or '@id' or 'url'
+        dblp_key = info.get("key") or hit.get("@id", "")
+        # Remove base URL if present in key
+        if dblp_key and dblp_key.startswith("https://dblp.org/rec/"):
+            dblp_key = dblp_key.replace("https://dblp.org/rec/", "").replace(".html", "")
 
         return Paper(
             id=dblp_key,
@@ -89,12 +99,14 @@ class DBLPClient(BaseClient):
             bibtex_key=self._generate_bibtex_key_from_dblp(dblp_key),
         )
 
-    def _generate_bibtex_key_from_dblp(self, dblp_key: str) -> str:
+    def _generate_bibtex_key_from_dblp(self, dblp_key: str | None) -> str | None:
         """Generate a BibTeX key from DBLP key.
 
         DBLP keys are like: journals/nature/SmithJones2024
         We convert to: DBLP:SmithJones2024
         """
+        if not dblp_key:
+            return None
         if "/" in dblp_key:
             parts = dblp_key.split("/")
             return f"DBLP:{parts[-1]}"
@@ -211,25 +223,41 @@ class DBLPClient(BaseClient):
         if cached:
             return cast(Paper, cached)
 
-        # DBLP doesn't have a direct lookup by key, so we search
-        # Extract the last part of the key for searching
-        search_term = paper_id.split("/")[-1] if "/" in paper_id else paper_id
+        # DBLP doesn't have a direct lookup by key for JSON metadata efficiently
+        # But we can search for the key specifically using a structured query or exact match
+        # DBLP key format: journals/nature/Smith2024
+
+        # If it looks like a DBLP key, we can try to fetch the BibTeX first to confirm existence
+        # or use the key in the search query directly if supported.
+
+        # Current strategy: Use the last part (key) for search, but this is flaky for common names.
+        # Better strategy: Search with the full key if possible or parse the key.
 
         try:
-            result = await self.search(search_term, limit=10)
+            result = await self.search(paper_id, limit=5)
 
-            # Find exact match
-            for paper in result.papers:
-                if paper.id == paper_id or paper_id in paper.id:
-                    self._paper_cache.set(cache_key, paper)
-                    return paper
-
-            # Return first result if no exact match
             if result.papers:
-                paper = result.papers[0]
-                self._paper_cache.set(cache_key, paper)
-                return paper
+                # Check if papers exist before access
+                if hasattr(result.papers[0], "id") and result.papers[0].id:
+                    dblp_key = result.papers[0].id
 
+                    # Check for direct match if it was a key search
+                    if "/" in paper_id and (paper_id in dblp_key or dblp_key in paper_id):
+                        paper = result.papers[0]
+                        self._paper_cache.set(cache_key, paper)
+                        return paper
+
+                    # If specific ID format but no exact match in title/etc
+                    if "/" in paper_id:
+                        # DBLP search is fuzzy, so we trust the first result if we searched for a key
+                        paper = result.papers[0]
+                        self._paper_cache.set(cache_key, paper)
+                        return paper
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"DBLP get_paper failed for {paper_id}: {e}")
             return None
 
         except Exception as e:
@@ -257,29 +285,35 @@ class DBLPClient(BaseClient):
         if "/" in paper_id:
             try:
                 # DBLP provides BibTeX at /{key}.bib
+                # Key format: journals/nature/Smith2024 -> https://dblp.org/rec/journals/nature/Smith2024.bib
                 url = f"{self.BASE_URL}/rec/{paper_id}.bib"
                 response = await self._get(url)
-                bibtex = response.text.strip()
 
-                if bibtex and bibtex.startswith("@"):
-                    self._bibtex_cache.set(cache_key, bibtex)
-                    return bibtex
+                if response.status_code == 200:
+                    bibtex = response.text.strip()
+                    if bibtex and (bibtex.startswith("@") or "author =" in bibtex):
+                        self._bibtex_cache.set(cache_key, bibtex)
+                        return bibtex
             except Exception as e:
+                # Log full traceback for debugging TypeError
                 logger.debug(f"Direct BibTeX fetch failed for {paper_id}: {e}")
 
         # Search and get BibTeX for first match
         try:
             result = await self.search(paper_id, limit=1)
             if result.papers:
-                dblp_key = result.papers[0].id
-                if dblp_key:
-                    url = f"{self.BASE_URL}/rec/{dblp_key}.bib"
-                    response = await self._get(url)
-                    bibtex = response.text.strip()
+                # Use property access safely or check dict
+                if hasattr(result.papers[0], "id") and result.papers[0].id:
+                    dblp_key = result.papers[0].id
+                    if dblp_key:
+                        url = f"{self.BASE_URL}/rec/{dblp_key}.bib"
+                        response = await self._get(url)
 
-                    if bibtex and bibtex.startswith("@"):
-                        self._bibtex_cache.set(cache_key, bibtex)
-                        return bibtex
+                        if response.status_code == 200:
+                            bibtex = response.text.strip()
+                            if bibtex and bibtex.startswith("@"):
+                                self._bibtex_cache.set(cache_key, bibtex)
+                                return bibtex
         except Exception as e:
             logger.warning(f"DBLP BibTeX search failed for {paper_id}: {e}")
 

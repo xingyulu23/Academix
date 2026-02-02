@@ -118,6 +118,31 @@ For OpenCode, modify your configuration file (usually at `~/.config/opencode/ope
 - **environment**: Add API keys or email here. `ACADEMIC_MCP_EMAIL` is recommended.
 - **timeout**: Optional. Increased to `10000` (10s) to handle network latency.
 
+## Data Source Coverage
+
+### Feature Support Matrix
+
+| Feature | OpenAlex | DBLP | CrossRef | Semantic Scholar | arXiv |
+|---------|:--------:|:----:|:--------:|:----------------:|:-----:|
+| Paper Search | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Get Paper Details | ✅ | ✅ | ✅ | ✅ | ✅ |
+| BibTeX Export | ✅ | ✅ Native | ✅ | ✅ | ✅ |
+| Citation Retrieval | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Author Search | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Related Papers (AI) | ❌ | ❌ | ❌ | ✅ | ❌ |
+
+### BibTeX Quality by Source
+
+| Source | Quality | Notes |
+|--------|---------|-------|
+| **DBLP** | ⭐⭐⭐ Excellent | Native BibTeX export. Best for CS papers. Includes complete venue info. |
+| **CrossRef** | ⭐⭐ Good | Accurate metadata from publishers. Requires valid DOI. |
+| **arXiv** | ⭐⭐ Good | Correct preprint info. Entry type is `@misc` with `eprint` field. |
+| **Semantic Scholar** | ⭐⭐ Good | Generated from metadata. May lack venue details. |
+| **OpenAlex** | ⭐ Variable | Generated from metadata. Some fields may be incomplete. |
+
+**Recommendation**: For CS papers, prioritize DBLP for BibTeX. For papers with DOI, CrossRef provides reliable metadata.
+
 ## MCP Tools
 
 | Tool | Description |

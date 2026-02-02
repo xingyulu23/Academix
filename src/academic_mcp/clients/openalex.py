@@ -8,6 +8,8 @@ import logging
 from typing import Any, cast
 from urllib.parse import quote_plus
 
+from ..bibtex import generate_bibtex
+from ..cache import get_bibtex_cache
 from ..models import (
     Author,
     CitationNetworkEdge,
@@ -48,6 +50,7 @@ class OpenAlexClient(BaseClient):
         """
         super().__init__(timeout=timeout)
         self.email = email
+        self._bibtex_cache = get_bibtex_cache()
         # Update user agent to include email for polite access
         if email:
             self.user_agent = f"AcademicMCP/0.1.0 (mailto:{email})"
@@ -518,3 +521,44 @@ class OpenAlexClient(BaseClient):
             "edges": [e.model_dump() for e in edges],
             "depth": depth,
         }
+
+    async def get_bibtex(self, paper_id: str) -> str | None:
+        """Get BibTeX entry for a paper.
+
+        Generates BibTeX from paper metadata since OpenAlex doesn't provide
+        native BibTeX export.
+
+        Args:
+            paper_id: OpenAlex ID, DOI, or other identifier
+
+        Returns:
+            BibTeX entry string or None if paper not found
+        """
+        # Check cache
+        cache_key = self._bibtex_cache.bibtex_key(f"openalex:{paper_id}")
+        cached = self._bibtex_cache.get(cache_key)
+        if cached:
+            return cast(str, cached)
+
+        # Get paper metadata and generate BibTeX
+        paper = await self.get_paper(paper_id)
+        if paper:
+            bibtex = generate_bibtex(paper)
+            self._bibtex_cache.set(cache_key, bibtex)
+            return bibtex
+
+        return None
+
+    async def get_bibtex_batch(self, paper_ids: list[str]) -> dict[str, str | None]:
+        """Get BibTeX entries for multiple papers.
+
+        Args:
+            paper_ids: List of paper identifiers
+
+        Returns:
+            Dictionary mapping paper_id to BibTeX entry (or None if not found)
+        """
+        results: dict[str, str | None] = {}
+        for paper_id in paper_ids:
+            results[paper_id] = await self.get_bibtex(paper_id)
+        return results

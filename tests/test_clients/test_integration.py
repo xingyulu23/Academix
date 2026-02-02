@@ -18,6 +18,8 @@ from academic_mcp.clients import (
     DBLPClient,
     OpenAlexClient,
 )
+from academic_mcp.clients.arxiv_client import ArxivClient
+from academic_mcp.clients.semantic import SemanticScholarClient
 from academic_mcp.models import PaperSource
 
 
@@ -71,7 +73,6 @@ async def test_openalex_get_paper():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="DBLP API returning 500 errors - temporary API issue")
 async def test_dblp_search():
     """Test DBLP search with real API call."""
     client = DBLPClient()
@@ -102,7 +103,6 @@ async def test_dblp_search():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="DBLP API returning 500 errors - temporary API issue")
 async def test_dblp_bibtex():
     """Test DBLP BibTeX export with real API call."""
     client = DBLPClient()
@@ -265,3 +265,133 @@ async def test_crossref_with_email():
     assert result is not None
     assert result.source == PaperSource.CROSSREF
     assert result.returned_count > 0
+
+
+# =============================================================================
+# BibTeX Tests - All Sources
+# =============================================================================
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_openalex_get_bibtex():
+    """Test OpenAlex BibTeX generation."""
+    client = OpenAlexClient()
+
+    bibtex = await client.get_bibtex("10.48550/arXiv.1706.03762")
+
+    assert bibtex is not None
+    assert isinstance(bibtex, str)
+    assert bibtex.startswith("@")
+    assert "title" in bibtex.lower()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_crossref_get_bibtex():
+    """Test CrossRef BibTeX generation."""
+    client = CrossRefClient()
+
+    bibtex = await client.get_bibtex("10.1038/nature14539")
+
+    assert bibtex is not None
+    assert isinstance(bibtex, str)
+    assert bibtex.startswith("@")
+    assert "title" in bibtex.lower()
+    assert "author" in bibtex.lower()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.xfail(reason="S2 rate limit - may fail without API key", strict=False)
+async def test_semantic_scholar_get_bibtex():
+    """Test Semantic Scholar BibTeX generation."""
+    client = SemanticScholarClient()
+
+    bibtex = await client.get_bibtex("10.48550/arXiv.2005.14165")
+
+    assert bibtex is not None
+    assert isinstance(bibtex, str)
+    assert bibtex.startswith("@")
+    assert "title" in bibtex.lower()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_arxiv_get_bibtex():
+    """Test arXiv BibTeX generation."""
+    client = ArxivClient()
+
+    bibtex = await client.get_bibtex("1706.03762")
+
+    assert bibtex is not None
+    assert isinstance(bibtex, str)
+    assert bibtex.startswith("@")
+    assert "title" in bibtex.lower()
+    assert "arxiv" in bibtex.lower() or "eprint" in bibtex.lower()
+
+
+# =============================================================================
+# Semantic Scholar Citations Test
+# =============================================================================
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.xfail(reason="S2 rate limit - may fail without API key", strict=False)
+async def test_semantic_scholar_get_citations():
+    """Test Semantic Scholar citation retrieval."""
+    client = SemanticScholarClient()
+
+    result = await client.get_citations("10.48550/arXiv.1706.03762", limit=5)
+
+    assert result is not None
+    assert result.paper_id == "10.48550/arXiv.1706.03762"
+    assert result.citation_count > 0
+    assert result.citing_papers is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.xfail(reason="S2 rate limit - may fail without API key", strict=False)
+async def test_semantic_scholar_search():
+    """Test Semantic Scholar paper search."""
+    client = SemanticScholarClient()
+
+    result = await client.search("attention is all you need", limit=5)
+
+    assert result is not None
+    assert result.source == PaperSource.SEMANTIC_SCHOLAR
+    assert result.returned_count > 0
+    assert result.papers is not None
+    assert len(result.papers) > 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_arxiv_search():
+    """Test arXiv paper search."""
+    client = ArxivClient()
+
+    result = await client.search("machine learning", limit=5)
+
+    assert result is not None
+    assert result.source == PaperSource.ARXIV
+    assert result.returned_count > 0
+    assert result.papers is not None
+    assert len(result.papers) > 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_arxiv_get_paper():
+    """Test arXiv get paper by ID."""
+    client = ArxivClient()
+
+    paper = await client.get_paper("1706.03762")
+
+    assert paper is not None
+    assert paper.arxiv_id is not None
+    assert "1706.03762" in paper.arxiv_id
+    assert paper.title is not None
+    assert "attention" in paper.title.lower()
